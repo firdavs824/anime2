@@ -15,7 +15,14 @@ def main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
             KeyboardButton(text="🎲 Tasodifiy anime")
         ],
         [
-            KeyboardButton(text="📋 So'nggi animelar"),
+            KeyboardButton(text="⭐ Sevimlilarim"),
+            KeyboardButton(text="🔥 TOP 10 Animelar")
+        ],
+        [
+            KeyboardButton(text="🎭 Janrlar"),
+            KeyboardButton(text="📋 So'nggi animelar")
+        ],
+        [
             KeyboardButton(text="ℹ️ Bot haqida")
         ]
     ]
@@ -41,10 +48,11 @@ def admin_menu_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="📊 Statistika")
         ],
         [
-            KeyboardButton(text="🗑 Animeni o'chirish"),
-            KeyboardButton(text="📢 Xabar tarqatish")
+            KeyboardButton(text="📢 Kanallarni boshqarish"),
+            KeyboardButton(text="🗑 Animeni o'chirish")
         ],
         [
+            KeyboardButton(text="📢 Xabar tarqatish"),
             KeyboardButton(text="🔙 Asosiy menyu")
         ]
     ]
@@ -194,6 +202,22 @@ def episodes_inline_keyboard(
             nav.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"eppage_{anime_id}_{current_ep}_{page + 1}"))
         rows.append(nav)
 
+    # Qo'shimcha tugmalar (Sevimlilar, Bildirishnoma, Reyting)
+    fav_text = "⭐ Sevimlilar"
+    sub_text = "🔔 Bildirishnoma"
+
+    rows.append([
+        InlineKeyboardButton(text=fav_text, callback_data=f"fav_{anime_id}"),
+        InlineKeyboardButton(text=sub_text, callback_data=f"sub_{anime_id}")
+    ])
+    rows.append([
+        InlineKeyboardButton(text="⭐ 1", callback_data=f"rate_{anime_id}_1"),
+        InlineKeyboardButton(text="⭐ 2", callback_data=f"rate_{anime_id}_2"),
+        InlineKeyboardButton(text="⭐ 3", callback_data=f"rate_{anime_id}_3"),
+        InlineKeyboardButton(text="⭐ 4", callback_data=f"rate_{anime_id}_4"),
+        InlineKeyboardButton(text="⭐ 5", callback_data=f"rate_{anime_id}_5")
+    ])
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -310,15 +334,87 @@ def channel_watch_button(bot_username: str, anime_code: str = "") -> InlineKeybo
     )
 
 
-def confirm_channel_post_send_keyboard() -> InlineKeyboardMarkup:
-    """Postni kanalga yuborishni tasdiqlash tugmasi."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🚀 Kanalga jo'natish", callback_data="do_channel_post_send"),
-                InlineKeyboardButton(text="❌ Bekor qilish", callback_data="do_channel_post_cancel")
-            ]
+def anime_actions_keyboard(
+    anime_id: int,
+    is_fav: bool = False,
+    is_sub: bool = False,
+    avg_rating: float = 0.0,
+    votes_count: int = 0
+) -> InlineKeyboardMarkup:
+    """Anime tafsilotlari ostidagi qo'shimcha tugmalar (Sevimlilar, Bildirishnoma, Reyting, Ulashish)."""
+    fav_text = "❌ Sevimlilardan o'chirish" if is_fav else "⭐ Sevimlilarga qo'shish"
+    sub_text = "🔕 Bildirishnomani o'chirish" if is_sub else "🔔 Yangi qism bildirishnomasi"
+
+    buttons = [
+        [
+            InlineKeyboardButton(text=fav_text, callback_data=f"fav_{anime_id}")
+        ],
+        [
+            InlineKeyboardButton(text=sub_text, callback_data=f"sub_{anime_id}")
+        ],
+        [
+            InlineKeyboardButton(text="⭐ 1", callback_data=f"rate_{anime_id}_1"),
+            InlineKeyboardButton(text="⭐ 2", callback_data=f"rate_{anime_id}_2"),
+            InlineKeyboardButton(text="⭐ 3", callback_data=f"rate_{anime_id}_3"),
+            InlineKeyboardButton(text="⭐ 4", callback_data=f"rate_{anime_id}_4"),
+            InlineKeyboardButton(text="⭐ 5", callback_data=f"rate_{anime_id}_5")
+        ],
+        [
+            InlineKeyboardButton(text="📤 Do'stlarga ulashish", switch_inline_query=str(anime_id))
         ]
-    )
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def must_subscribe_keyboard(channels: List[Dict[str, Any]], anime_code: str = "") -> InlineKeyboardMarkup:
+    """Dinmik majburiy kanallar klaviaturasi."""
+    buttons = []
+    for c in channels:
+        buttons.append([
+            InlineKeyboardButton(text=f"📢 {c['channel_name']}", url=c['channel_link'])
+        ])
+    
+    cb_data = f"checksub_{anime_code}" if anime_code else "checksub_main"
+    buttons.append([
+        InlineKeyboardButton(text="🔄 Obunani tekshirish", callback_data=cb_data)
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def genres_keyboard() -> InlineKeyboardMarkup:
+    """Janrlar ro'yxati inline klaviaturasi."""
+    genres = [
+        "Jangovar", "Fantastika", "Romantika", "Komediya",
+        "Sarguzasht", "Dramatika", "Sport", "Sehr-jodu", "Maktab", "Triller"
+    ]
+    rows = []
+    current_row = []
+    for g in genres:
+        current_row.append(InlineKeyboardButton(text=f"🎭 {g}", callback_data=f"genre_{g}"))
+        if len(current_row) == 2:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def channels_admin_keyboard(channels: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Admin uchun kanallarni boshqarish klaviaturasi."""
+    buttons = [
+        [
+            InlineKeyboardButton(text="➕ Yangi kanal qo'shish", callback_data="admin_add_channel")
+        ]
+    ]
+    for c in channels:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🗑 {c['channel_name']} (O'chirish)",
+                callback_data=f"admin_del_chan_{c['id']}"
+            )
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 

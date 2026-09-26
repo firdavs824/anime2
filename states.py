@@ -34,3 +34,10 @@ class ChannelPostStates(StatesGroup):
     waiting_for_text = State()         # Post matni (caption)
     confirm_post = State()             # Tasdiqlash va kanalga jo'natish
 
+
+class AddChannelStates(StatesGroup):
+    waiting_for_channel_id = State()   # Kanal ID yoki username (@kanal)
+    waiting_for_channel_name = State() # Kanal nomi
+    waiting_for_channel_link = State() # Kanal havolasi (https://t.me/...)
+
+
