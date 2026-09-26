@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 
 import database as db
 import keyboards as kb
-from states import CreateAnimeStates, AddEpisodeStates, DeleteAnimeStates, BroadcastStates, ChannelPostStates
+from states import CreateAnimeStates, AddEpisodeStates, DeleteAnimeStates, BroadcastStates, ChannelPostStates, AddChannelStates
 
 router = Router()
 # Admin buyruqlari ham faqat shaxsiy yozishmada (lichkada) ishlasin
@@ -270,6 +270,9 @@ async def receive_episode_file(message: Message, state: FSMContext):
         file_type = "animation"
 
     await db.add_episode(anime_id=anime_id, episode_num=ep_num, file_id=file_id, file_type=file_type)
+
+    # Obunachilarga avtomatik bildirishnoma yuborish
+    asyncio.create_task(notify_anime_subscribers(message.bot, anime_id, title, code, ep_num))
 
     next_ep = ep_num + 1
     await state.update_data(episode_num=next_ep)
@@ -627,7 +630,8 @@ async def channel_post_start(message: Message, state: FSMContext):
         return
 
     channel_id = await db.get_setting("channel_id")
-    if not channel_id:
+    channels = await db.get_all_channels()
+    if not channel_id and not channels:
         await message.answer(
             "⚠️ <b>Kanal ulanmagan!</b>\n\n"
             "Iltimos, avval botingizni kanalga Administrator qilib qo'shing yoki "
@@ -638,15 +642,35 @@ async def channel_post_start(message: Message, state: FSMContext):
         return
 
     await state.clear()
-    await state.set_state(ChannelPostStates.waiting_for_media)
+    animes = await db.get_all_animes(limit=15)
 
     await message.answer(
         "📢 <b>Kanalga uzatish</b>\n\n"
-        "📸 <b>1-qadam: Post uchun Rasm yoki Video yuboring:</b>\n\n"
-        "<i>(Rasm, video yoki GIF yuborishingiz mumkin. Agar rasm/video shart bo'lmasa, '⏭ O'tkazib yuborish' tugmasini bosing)</i>",
-        reply_markup=kb.skip_or_cancel_keyboard(),
+        "Qaysi anime uchun post tayyorlamoqchisiz?\n"
+        "<i>(Anime tanlansa, kanaldagi 'Tomosha qilish' tugmasini bosganlarga botda o'sha anime avtomatik ochiladi!)</i>",
+        reply_markup=kb.channel_post_animes_keyboard(animes),
         parse_mode="HTML"
     )
+
+
+@router.callback_query(F.data.startswith("sendtochan_"))
+async def select_anime_for_channel_post(callback: CallbackQuery, state: FSMContext):
+    anime_id = int(callback.data.split("_")[1])
+    anime = await db.get_anime_by_id(anime_id)
+    if not anime:
+        await callback.answer("Anime topilmadi!", show_alert=True)
+        return
+
+    await state.update_data(anime_id=anime_id, anime_code=anime["code"], anime_title=anime["title"])
+    await state.set_state(ChannelPostStates.waiting_for_media)
+
+    await callback.message.edit_text(
+        f"🎬 <b>{anime['title']}</b> tanlandi! (Kodi: <code>{anime['code']}</code>)\n\n"
+        "📸 <b>1-qadam: Post uchun Rasm yoki Video yuboring:</b>\n\n"
+        "<i>(Rasm/Video yuboring yoki '⏭ O'tkazib yuborish' tugmasini bosing)</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 # --- Media (Rasm / Video) qabul qilish ---
@@ -755,11 +779,8 @@ async def finalize_channel_post_send(callback: CallbackQuery, bot: Bot, state: F
     me = await bot.get_me()
     bot_username = me.username or "anime_bot"
 
-    post_text = data.get("post_text", "")
-    media_id = data.get("media_id")
-    media_type = data.get("media_type")
-
-    markup = kb.channel_watch_button(bot_username)
+    anime_code = data.get("anime_code", "")
+    markup = kb.channel_watch_button(bot_username, anime_code=anime_code)
 
     try:
         if media_id and media_type == "photo":
@@ -818,5 +839,127 @@ async def cancel_channel_post_send(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("❌ Kanalga joylash bekor qilindi.")
     await callback.message.answer("Admin menyu:", reply_markup=kb.admin_menu_keyboard())
     await callback.answer()
+
+
+# ================== 8. MAJBURIY KANALLARNI BOSHQARISH ==================
+
+async def notify_anime_subscribers(bot: Bot, anime_id: int, title: str, code: str, ep_num: int):
+    """Anime kuzatuvchilariga yangi qism chiqqani haqida bildirishnoma yuborish."""
+    subscribers = await db.get_anime_subscribers(anime_id)
+    for uid in subscribers:
+        try:
+            await bot.send_message(
+                chat_id=uid,
+                text=f"🔔 <b>Yangi qism yuklandi!</b>\n\n🎬 <b>{title}</b> animesiga <b>{ep_num}-qism</b> joylandi!\n\n🔑 Kodi: <code>{code}</code>\n\n<i>Tomosha qilish uchun botga kodingizni yozing!</i>",
+                parse_mode="HTML"
+            )
+            await asyncio.sleep(0.04)
+        except Exception:
+            pass
+
+
+@router.message(F.text == "📢 Kanallarni boshqarish")
+async def manage_channels_menu(message: Message):
+    if not await check_admin_permission(message.from_user.id):
+        return
+
+    channels = await db.get_all_channels()
+    text = "📢 <b>Majburiy kanallar ro'yxati:</b>\n\n"
+    if not channels:
+        text += "<i>Hozircha birorta ham majburiy kanal qo'shilmagan.</i>\n"
+    else:
+        for i, c in enumerate(channels, 1):
+            text += f"{i}. <b>{c['channel_name']}</b>\n   🆔 <code>{c['channel_id']}</code> | 🔗 <a href='{c['channel_link']}'>Havola</a>\n\n"
+
+    text += "\n<i>Yangi kanal qo'shish yoki mavjudini o'chirish uchun tugmalardan foydalaning:</i>"
+    await message.answer(text, reply_markup=kb.channels_admin_keyboard(channels), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "admin_add_channel")
+async def start_add_channel_callback(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AddChannelStates.waiting_for_channel_id)
+    await callback.message.edit_text(
+        "📢 <b>1-qadam: Kanal ID sini yoki username ini kiriting:</b>\n\n"
+        "<i>Masalan: -1001234567890 yoki @kanal_username</i>\n\n"
+        "💡 <i>Eslatma: Bot ushbu kanalda administrator bo'lishi kerak.</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.message(AddChannelStates.waiting_for_channel_id, F.text)
+async def receive_channel_id(message: Message, state: FSMContext):
+    if message.text == "❌ Bekor qilish":
+        await cancel_any_action(message, state)
+        return
+
+    channel_id = message.text.strip()
+    await state.update_data(channel_id=channel_id)
+    await state.set_state(AddChannelStates.waiting_for_channel_name)
+    await message.answer(
+        "📝 <b>2-qadam: Kanal nomini kiriting:</b>\n\n"
+        "<i>Masalan: Rasmiy Anime Kanalimiz</i>",
+        reply_markup=kb.cancel_keyboard(),
+        parse_mode="HTML"
+    )
+
+
+@router.message(AddChannelStates.waiting_for_channel_name, F.text)
+async def receive_channel_name(message: Message, state: FSMContext):
+    if message.text == "❌ Bekor qilish":
+        await cancel_any_action(message, state)
+        return
+
+    channel_name = message.text.strip()
+    await state.update_data(channel_name=channel_name)
+    await state.set_state(AddChannelStates.waiting_for_channel_link)
+    await message.answer(
+        "🔗 <b>3-qadam: Kanal taklif havolasini (Link) kiriting:</b>\n\n"
+        "<i>Masalan: https://t.me/kanal_username yoki taklif havolasi</i>",
+        reply_markup=kb.cancel_keyboard(),
+        parse_mode="HTML"
+    )
+
+
+@router.message(AddChannelStates.waiting_for_channel_link, F.text)
+async def receive_channel_link(message: Message, state: FSMContext):
+    if message.text == "❌ Bekor qilish":
+        await cancel_any_action(message, state)
+        return
+
+    channel_link = message.text.strip()
+    data = await state.get_data()
+    channel_id = data["channel_id"]
+    channel_name = data["channel_name"]
+
+    await db.add_channel(channel_id, channel_name, channel_link)
+    await state.clear()
+
+    await message.answer(
+        f"✅ <b>Kanal muvaffaqiyatli saqlandi!</b>\n\n"
+        f"📢 <b>Nomi:</b> {channel_name}\n"
+        f"🆔 <b>ID:</b> <code>{channel_id}</code>\n"
+        f"🔗 <b>Link:</b> {channel_link}",
+        reply_markup=kb.admin_menu_keyboard(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("admin_del_chan_"))
+async def delete_channel_callback(callback: CallbackQuery):
+    chan_db_id = int(callback.data.split("_")[3])
+    await db.remove_channel_by_id(chan_db_id)
+    await callback.answer("Kanal o'chirildi!", show_alert=True)
+
+    channels = await db.get_all_channels()
+    text = "📢 <b>Majburiy kanallar ro'yxati:</b>\n\n"
+    if not channels:
+        text += "<i>Hozircha birorta ham majburiy kanal qo'shilmagan.</i>\n"
+    else:
+        for i, c in enumerate(channels, 1):
+            text += f"{i}. <b>{c['channel_name']}</b>\n   🆔 <code>{c['channel_id']}</code> | 🔗 <a href='{c['channel_link']}'>Havola</a>\n\n"
+
+    await callback.message.edit_text(text, reply_markup=kb.channels_admin_keyboard(channels), parse_mode="HTML")
+
 
 

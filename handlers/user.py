@@ -17,36 +17,46 @@ router.message.filter(F.chat.type == "private")
 # ================== MAJBURIY OBUNA TEKSHIRUVI ==================
 
 async def check_user_subscription(bot: Bot, user_id: int) -> bool:
-    """Foydalanuvchi majburiy kanalga a'zo bo'lganligini tekshirish."""
-    # Adminlar har doim erkin foydalanadi
+    """Foydalanuvchi barcha majburiy kanallarga a'zo bo'lganligini tekshirish."""
     if await db.is_user_admin(user_id):
         return True
 
-    channel_id = await db.get_setting("channel_id")
-    if not channel_id:
-        # Kanal ID hali o'rnatilmagan bo'lsa (masalan, bot hali kanalga admin qilinmagan bo'lsa)
-        return True
-
-    try:
-        member = await bot.get_chat_member(chat_id=int(channel_id), user_id=user_id)
-        if member.status in ["creator", "administrator", "member", "restricted"]:
+    channels = await db.get_all_channels()
+    if not channels:
+        # Agarda dinamik kanallar yo'q bo'lsa, eskisini tekshiramiz
+        old_chan_id = await db.get_setting("channel_id")
+        if not old_chan_id:
             return True
-        return False
-    except Exception as e:
-        # Agar bot kanalga admin qilinmagan bo'lsa yoki tekshiruvda xatolik bo'lsa
-        return True
+        channels = [{"channel_id": old_chan_id, "channel_name": "Kanalimiz", "channel_link": await db.get_setting("channel_link", "https://t.me/+pW5zQXdYETs1Y2Uy")}]
+
+    for c in channels:
+        try:
+            chan_id_str = c["channel_id"]
+            chat_id = int(chan_id_str) if chan_id_str.lstrip("-").isdigit() else chan_id_str
+            member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+            if member.status not in ["creator", "administrator", "member", "restricted"]:
+                return False
+        except Exception:
+            # Agar bot kanalga admin qilinmagan bo'lsa tekshiruvdan o'tkaziladi
+            continue
+
+    return True
 
 
 async def prompt_subscription(message: Message, anime_code: str = ""):
     """Obuna bo'lish talabi xabari."""
-    channel_link = await db.get_setting("channel_link", "https://t.me/+pW5zQXdYETs1Y2Uy")
+    channels = await db.get_all_channels()
+    if not channels:
+        link = await db.get_setting("channel_link", "https://t.me/+pW5zQXdYETs1Y2Uy")
+        channels = [{"channel_name": "Kanalimiz", "channel_link": link}]
+
     text = (
-        "⚠️ <b>Animeni tomosha qilish uchun avval kanalimizga a'zo bo'ling!</b>\n\n"
-        "Quyidagi havola orqali kanalga obuna bo'ling va so'ng <b>'✅ A'zo bo'ldim / Tekshirish'</b> tugmasini bosing:"
+        "⚠️ <b>Animeni tomosha qilish uchun avval quyidagi kanallarimizga a'zo bo'ling!</b>\n\n"
+        "Kanallarga obuna bo'lib, so'ng <b>'🔄 Obunani tekshirish'</b> tugmasini bosing:"
     )
     await message.answer(
         text,
-        reply_markup=kb.subscription_keyboard(channel_link, anime_code=anime_code),
+        reply_markup=kb.must_subscribe_keyboard(channels, anime_code=anime_code),
         parse_mode="HTML"
     )
 
@@ -431,6 +441,105 @@ async def back_to_main_menu(message: Message, state: FSMContext):
     await message.answer("Siz asosiy menyudasiz.", reply_markup=kb.main_menu_keyboard(is_admin))
 
 
+@router.message(F.text == "⭐ Sevimlilarim")
+async def favorites_button(message: Message, bot: Bot):
+    if not await check_user_subscription(bot, message.from_user.id):
+        await prompt_subscription(message)
+        return
+
+    favs = await db.get_user_favorites(message.from_user.id)
+    if not favs:
+        await message.answer("⭐️ Sizda hali sevimlilar ro'yxati bo'sh. Anime ko'rayotganda '⭐ Sevimlilarga qo'shish' tugmasini bosing.")
+        return
+
+    text = "⭐ <b>Sizning sevimli animelaringiz:</b>\n\n"
+    for i, a in enumerate(favs, 1):
+        text += f"{i}. <b>{a['title']}</b> ({a.get('episodes_count', 0)} qism) — Kodi: <code>{a['code']}</code>\n"
+    text += "\n<i>Tomosha qilish uchun anime kodini yuboring!</i>"
+    await message.answer(text, parse_mode="HTML")
+
+
+@router.message(F.text == "🔥 TOP 10 Animelar")
+async def top_animes_button(message: Message, bot: Bot):
+    if not await check_user_subscription(bot, message.from_user.id):
+        await prompt_subscription(message)
+        return
+
+    top_animes = await db.get_top_rated_animes(limit=10)
+    if not top_animes:
+        await message.answer("🔥 Hozircha baholangan top animelar mavjud emas.")
+        return
+
+    text = "🔥 <b>Eng yuqori baholangan TOP Animelar:</b>\n\n"
+    for i, a in enumerate(top_animes, 1):
+        stars = "⭐" * int(round(a.get("avg_rating", 5)))
+        text += f"{i}. <b>{a['title']}</b> — {a.get('avg_rating', 0)} {stars} ({a.get('votes_count', 0)} ovoz)\n   🔑 Kodi: <code>{a['code']}</code>\n\n"
+    await message.answer(text, parse_mode="HTML")
+
+
+@router.message(F.text == "🎭 Janrlar")
+async def genres_button(message: Message, bot: Bot):
+    if not await check_user_subscription(bot, message.from_user.id):
+        await prompt_subscription(message)
+        return
+
+    await message.answer(
+        "🎭 <b>Janr bo'yicha animelarni saralash:</b>\n\nKerakli janrni tanlang:",
+        reply_markup=kb.genres_keyboard(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("genre_"))
+async def genre_selected_callback(callback: CallbackQuery):
+    genre_name = callback.data.split("_", 1)[1]
+    animes = await db.get_animes_by_genre(genre_name, limit=15)
+    if not animes:
+        await callback.answer(f"'{genre_name}' janrida hali animelar topilmadi.", show_alert=True)
+        return
+
+    text = f"🎭 <b>{genre_name} janridagi animelar:</b>\n\n"
+    for i, a in enumerate(animes, 1):
+        text += f"{i}. <b>{a['title']}</b> ({a.get('episodes_count', 0)} qism) — Kodi: <code>{a['code']}</code>\n"
+    text += "\n<i>Tomosha qilish uchun anime kodini yuboring!</i>"
+    await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("fav_"))
+async def toggle_favorite_callback(callback: CallbackQuery):
+    anime_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+    added = await db.toggle_favorite(user_id, anime_id)
+    if added:
+        await callback.answer("⭐ Anime sevimlilaringizga qo'shildi!", show_alert=True)
+    else:
+        await callback.answer("❌ Anime sevimlilardan o'chirildi.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("sub_"))
+async def toggle_subscription_callback(callback: CallbackQuery):
+    anime_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+    subscribed = await db.toggle_anime_subscription(user_id, anime_id)
+    if subscribed:
+        await callback.answer("🔔 Ushbu animega yangi qism chiqqanda sizga bildirishnoma boradi!", show_alert=True)
+    else:
+        await callback.answer("🔕 Bildirishnoma o'chirildi.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("rate_"))
+async def rate_anime_callback(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    anime_id = int(parts[1])
+    score = int(parts[2])
+    user_id = callback.from_user.id
+
+    await db.add_rating(user_id, anime_id, score)
+    stats = await db.get_anime_rating_stats(anime_id)
+    await callback.answer(f"✅ Rahmat! Siz {score} ⭐ baho berdingiz.\nO'rtacha baho: {stats['avg_rating']} ⭐ ({stats['votes_count']} ta ovoz)", show_alert=True)
+
+
 async def handle_anime_search(message: Message, bot: Bot, query: str):
     """Kodni qidirish va foydalanuvchiga yuborish."""
     user = message.from_user
@@ -470,7 +579,8 @@ async def general_text_handler(message: Message, bot: Bot, state: FSMContext):
     if text.startswith("/") or "Kanalga uzatish" in text or text in [
         "👑 Admin Panel", "❌ Bekor qilish", "➕ Anime qo'shish",
         "➕ Yangi Anime yaratish", "➕ Qism qo'shish", "📊 Statistika",
-        "📋 Animelar ro'yxati", "🗑 Animeni o'chirish", "📢 Xabar tarqatish"
+        "📋 Animelar ro'yxati", "🗑 Animeni o'chirish", "📢 Xabar tarqatish",
+        "⭐ Sevimlilarim", "🔥 TOP 10 Animelar", "🎭 Janrlar", "📢 Kanallarni boshqarish"
     ]:
         return
 
