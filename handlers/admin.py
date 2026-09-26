@@ -779,6 +779,9 @@ async def finalize_channel_post_send(callback: CallbackQuery, bot: Bot, state: F
     me = await bot.get_me()
     bot_username = me.username or "anime_bot"
 
+    post_text = data.get("post_text", "")
+    media_id = data.get("media_id")
+    media_type = data.get("media_type")
     anime_code = data.get("anime_code", "")
     markup = kb.channel_watch_button(bot_username, anime_code=anime_code)
 
