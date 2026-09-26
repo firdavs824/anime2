@@ -541,7 +541,7 @@ async def rate_anime_callback(callback: CallbackQuery):
 
 
 async def handle_anime_search(message: Message, bot: Bot, query: str):
-    """Kodni qidirish va foydalanuvchiga yuborish."""
+    """Kodni yoki nomni smart qidirish va foydalanuvchiga yuborish."""
     user = message.from_user
     if user:
         await db.add_or_update_user(user.id, user.username, user.full_name)
@@ -551,23 +551,37 @@ async def handle_anime_search(message: Message, bot: Bot, query: str):
         await prompt_subscription(message, anime_code=query)
         return
 
+    # 1. Kod bo'yicha aniq qidiruv
     anime = await db.get_anime_by_code(query)
     if anime:
         await send_anime_to_user(bot, message.chat.id, anime)
         return
 
-    # O'xshash nomlar bo'yicha qidiruv
+    # 2. Nom va kalit so'zlar bo'yicha aqlli qidiruv
+    clean_q = query.replace("'", "").replace("`", "").replace("ʻ", "").replace("’", "").strip()
     similar = await db.search_animes(query, limit=5)
+    if not similar and clean_q:
+        # Birinchi so'z bo'yicha qidirib ko'rish
+        first_word = clean_q.split()[0] if clean_q.split() else clean_q
+        similar = await db.search_animes(first_word, limit=5)
+
     if similar:
-        suggest_text = f"❌ <code>{query}</code> kodli anime topilmadi.\n\nO'xshash animelar:\n\n"
+        # Agar 1 ta mos anime topilsa, to'g'ridan-to'g'ri ko'rsatish
+        if len(similar) == 1:
+            full_anime = await db.get_anime_by_id(similar[0]["id"])
+            if full_anime:
+                await send_anime_to_user(bot, message.chat.id, full_anime)
+                return
+
+        suggest_text = f"🔍 <b>Topilgan animelar ro'yxati:</b>\n\n"
         for s in similar:
             suggest_text += f"🎬 <b>{s['title']}</b> ({s.get('episodes_count', 0)} qism) — Kodi: <code>{s['code']}</code>\n"
-        suggest_text += "\n<i>Kerakli anime kodini yozib yuboring!</i>"
+        suggest_text += "\n<i>Tomosha qilish uchun anime kodini yozib yuboring!</i>"
         await message.answer(suggest_text, parse_mode="HTML")
     else:
         await message.answer(
-            f"❌ <b>'{query}'</b> kodli anime topilmadi!\n\n"
-            f"Iltimos, kodni to'g'ri kiritganingizni tekshiring yoki '📋 So'nggi animelar' bo'limini ko'ring.",
+            f"❌ <b>'{query}'</b> bo'yicha anime topilmadi!\n\n"
+            f"💡 Iltimos, anime kodini yoki nomining 1-so'zini yozib yuboring (masalan: <code>olmas</code> yoki kodi <code>101</code>).",
             parse_mode="HTML"
         )
 
